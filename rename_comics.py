@@ -242,7 +242,7 @@ def check_external_duplicate(title: str, desired_filename: str) -> bool:
     Case-insensitive matching for both folder and filename.
     File extensions are ignored when comparing filenames.
     
-    Returns True if a file with the same stem (name without extension) exists in EXTERNAL_COMICS_DIR/Title/ (case-insensitive)
+    Returns True if a file with the same stem (name without extension) exists in EXTERNAL_COMICS_DIR/<series folder>/ (case-insensitive)
     """
     if not EXTERNAL_COMICS_DIR or not os.path.isdir(EXTERNAL_COMICS_DIR):
         # External directory doesn't exist, treat as no duplicate
@@ -312,12 +312,12 @@ def capitalize_title(title: str) -> str:
 
 
 def plan_new_name_and_title(stem: str) -> Optional[Tuple[str, str]]:
-    """Return (title, desired_stem) for either issue, volume, or standalone forms."""
+    """Return (series_folder, desired_stem) for either issue, volume, or standalone forms."""
     vol = parse_volume_filename(stem)
     if vol:
         title, vol_num, year = vol
         title = capitalize_title(title)
-        return title, f"{title} Vol. {vol_num} ({year})"
+        return f"{title} ({year})", f"{title} Vol. {vol_num} ({year})"
 
     # Check for annual issues before regular issues (annual has more specific pattern)
     annual = parse_annual_filename(stem)
@@ -327,7 +327,7 @@ def plan_new_name_and_title(stem: str) -> Optional[Tuple[str, str]]:
         base_title = capitalize_title(base_title)
         full_title = capitalize_title(full_title)
         if year:
-            return base_title, f"{full_title} {format_issue(issue_num)} ({year})"
+            return f"{base_title} ({year})", f"{full_title} {format_issue(issue_num)} ({year})"
         else:
             return base_title, f"{full_title} {format_issue(issue_num)}"
 
@@ -336,7 +336,7 @@ def plan_new_name_and_title(stem: str) -> Optional[Tuple[str, str]]:
         title, issue_num, year = iss
         title = capitalize_title(title)
         if year:
-            return title, f"{title} {format_issue(issue_num)} ({year})"
+            return f"{title} ({year})", f"{title} {format_issue(issue_num)} ({year})"
         else:
             return title, f"{title} {format_issue(issue_num)}"
 
@@ -344,7 +344,7 @@ def plan_new_name_and_title(stem: str) -> Optional[Tuple[str, str]]:
     if standalone:
         title, year = standalone
         title = capitalize_title(title)
-        return title, f"{title} ({year})"
+        return f"{title} ({year})", f"{title} ({year})"
 
     standalone_no_year = parse_standalone_no_year_filename(stem)
     if standalone_no_year:
@@ -435,15 +435,15 @@ def process_directory(target_dir: str, dry_run: bool, verbose: bool, recursive: 
             errors_list.append(entry)
             continue
 
-        # If already exactly matches desired format, skip
-        if stem == desired_stem:
+        # Skip only when both the filename and series folder are correct.
+        title_dir = os.path.join(target_dir, plan[0])
+        if stem == desired_stem and os.path.abspath(os.path.dirname(src_path)) == os.path.abspath(title_dir):
             skipped += 1
             if verbose:
                 print(f"OK        : {entry}")
             continue
 
-        # Place renamed files into a subfolder named after the Title
-        title_dir = os.path.join(target_dir, plan[0])
+        # Place files into the planned series folder.
         if not dry_run:
             ensure_dir(title_dir)
         dest_path = unique_destination_path(title_dir, desired_stem, ext)
@@ -539,7 +539,7 @@ def process_directory(target_dir: str, dry_run: bool, verbose: bool, recursive: 
 
 def main(argv: Optional[list] = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Normalize to issues 'Title #XXX (YEAR)', volumes 'Title Vol. N (YEAR)', or standalone 'Title (YEAR)'; move renamed files into ./<Title>; unparseable files to ./error"
+        description="Normalize to issues 'Title #XXX (YEAR)', volumes 'Title Vol. N (YEAR)', or standalone 'Title (YEAR)'; move files into ./<Title> (<YEAR>) (or ./<Title> without a year); unparseable files to ./error"
     )
     parser.add_argument(
         "directory",

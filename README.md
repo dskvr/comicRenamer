@@ -1,6 +1,6 @@
 # Comic Renamer
 
-A Python script to automatically rename and organize comic book files (`.cbz` and `.cbr`) into a consistent, normalized format. The script intelligently parses various filename formats and organizes comics into folders by title, with built-in duplicate detection against an external comics directory.
+A Python script to automatically rename and organize comic book files (`.cbz` and `.cbr`) into a consistent, normalized format. The script intelligently parses various filename formats and organizes comics into folders by title and year, with built-in duplicate detection against an external comics directory.
 
 ## Features
 
@@ -11,7 +11,7 @@ A Python script to automatically rename and organize comic book files (`.cbz` an
   - Standalone comics: `Title (2025)`, `Title - Subtitle (2024)`, etc.
   - Files without years or issue numbers
 
-- **Automatic organization** - Groups comics into folders by title
+- **Automatic organization** - Groups comics into folders by title and year
 
 - **Duplicate detection** - Checks against an external comics directory (ignores file extensions)
 
@@ -80,8 +80,11 @@ comics inside subdirectories, add `--recursive` (`-r`):
 python3 rename_comics.py /mnt/user/media/Comics --recursive --dry-run --verbose
 ```
 
-Recursive mode organizes renamed files into title folders under the selected
-directory. Already-normalized filenames remain where they are. Hidden folders,
+Files are organized into `Title (Year)/` folders under the selected directory,
+using the year parsed from each filename. Different years get separate folders;
+files without a parsed year use `Title/`. Already-normalized filenames are moved
+if they are in the wrong folder. Use `--recursive` to reorganize existing title
+folders. Empty source folders are left in place. Hidden folders,
 `error/`, and `possibleDuplicates/` are excluded; directory symlinks are not
 followed. Dry runs do not create folders or move files.
 
@@ -113,20 +116,20 @@ The script recognizes and normalizes various filename patterns:
 
 ### Issues
 
-- `Batman #001 (2025).cbz` → `Batman/Batman #001 (2025).cbz`
-- `Batman 001 (2019).cbr` → `Batman/Batman #001 (2019).cbr`
-- `Spider-Man #1 (2020).cbz` → `Spider-Man/Spider-Man #001 (2020).cbz`
-- `Title 02 (of 04) (2025).cbz` → `Title/Title #002 (2025).cbz`
+- `Batman #001 (2025).cbz` → `Batman (2025)/Batman #001 (2025).cbz`
+- `Batman 001 (2019).cbr` → `Batman (2019)/Batman #001 (2019).cbr`
+- `Spider-Man #1 (2020).cbz` → `Spider-Man (2020)/Spider-Man #001 (2020).cbz`
+- `Title 02 (of 04) (2025).cbz` → `Title (2025)/Title #002 (2025).cbz`
 
 ### Volumes
 
-- `Watchmen v02 (2012).cbr` → `Watchmen/Watchmen Vol. 2 (2012).cbr`
-- `Saga Vol. 1 (2012).cbz` → `Saga/Saga Vol. 1 (2012).cbz`
+- `Watchmen v02 (2012).cbr` → `Watchmen (2012)/Watchmen Vol. 2 (2012).cbr`
+- `Saga Vol. 1 (2012).cbz` → `Saga (2012)/Saga Vol. 1 (2012).cbz`
 
 ### Standalone
 
-- `Batman Annual (2025).cbz` → `Batman Annual/Batman Annual (2025).cbz`
-- `Special Edition (2024).cbr` → `Special Edition/Special Edition (2024).cbr`
+- `Batman Annual (2025).cbz` → `Batman Annual (2025)/Batman Annual (2025).cbz`
+- `Special Edition (2024).cbr` → `Special Edition (2024)/Special Edition (2024).cbr`
 
 ## Output Organization
 
@@ -134,9 +137,10 @@ The script organizes files as follows:
 
 ```
 directory/
-├── Title Name/
+├── Title Name (2025)/
 │   ├── Title Name #001 (2025).cbz
-│   ├── Title Name #002 (2025).cbz
+│   └── Title Name #002 (2025).cbz
+├── Title Name (2020)/
 │   └── Title Name Vol. 1 (2020).cbz
 ├── error/
 │   └── (unparseable files)
@@ -149,7 +153,7 @@ directory/
 The script checks for duplicates by:
 
 1. Comparing filenames (without extensions) against the external comics directory
-2. Matching by title folder and issue number
+2. Matching the `Title (Year)` folder (or `Title` without a year) and normalized filename stem
 3. Case-insensitive comparison
 4. Moving entire title folders to `possibleDuplicates/` if any duplicates are found
 

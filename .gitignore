@@ -18,6 +18,7 @@ ENV/
 # Working directories (output from script)
 error/
 possibleDuplicates/
+.quarantine/
 
 # IDE
 .vscode/
@@ -31,4 +32,3 @@ possibleDuplicates/
 
 # Environment variables
 .env
-

@@ -40,7 +40,7 @@ class FilesystemFailureTests(unittest.TestCase):
 
     def test_failed_rename_is_nonzero_and_does_not_claim_quarantine_success(self):
         source = self.write(self.root / 'incoming/Saga 029 (2012).cbz')
-        with patch.object(renamer.os, 'rename', side_effect=PermissionError('rename denied')), \
+        with patch.object(renamer, 'move_file_no_replace', side_effect=PermissionError('rename denied')), \
                 patch.object(renamer.shutil, 'move', side_effect=PermissionError('quarantine denied')):
             status, output = self.run_cli()
 
@@ -53,7 +53,7 @@ class FilesystemFailureTests(unittest.TestCase):
 
     def test_failed_rename_removes_only_new_empty_destination_directory(self):
         self.write(self.root / 'incoming/Saga 029 (2012).cbz')
-        with patch.object(renamer.os, 'rename', side_effect=PermissionError('rename denied')), \
+        with patch.object(renamer, 'move_file_no_replace', side_effect=PermissionError('rename denied')), \
                 patch.object(renamer.shutil, 'move', side_effect=PermissionError('quarantine denied')):
             self.run_cli()
 
@@ -62,7 +62,7 @@ class FilesystemFailureTests(unittest.TestCase):
 
     def test_failed_rename_leaves_original_in_place_even_when_quarantine_is_writable(self):
         source = self.write(self.root / 'incoming/Saga 029 (2012).cbz')
-        with patch.object(renamer.os, 'rename', side_effect=PermissionError('rename denied')):
+        with patch.object(renamer, 'move_file_no_replace', side_effect=PermissionError('rename denied')):
             status, output = self.run_cli()
 
         self.assertTrue(source.exists(), output)
@@ -73,7 +73,7 @@ class FilesystemFailureTests(unittest.TestCase):
     def test_failed_rename_preserves_existing_destination_metadata(self):
         source = self.write(self.root / 'incoming/Saga 029 (2012).cbz')
         metadata = self.write(self.root / 'Saga (2012)/metadata.opf', b'existing metadata')
-        with patch.object(renamer.os, 'rename', side_effect=PermissionError('rename denied')), \
+        with patch.object(renamer, 'move_file_no_replace', side_effect=PermissionError('rename denied')), \
                 patch.object(renamer.shutil, 'move', side_effect=PermissionError('quarantine denied')):
             self.run_cli()
 
@@ -96,13 +96,13 @@ class FilesystemFailureTests(unittest.TestCase):
         source = self.write(self.root / 'incoming/Saga 029 (2012).cbz')
         output = io.StringIO()
         observations = []
-        original_rename = renamer.os.rename
+        original_rename = renamer.move_file_no_replace
 
         def observed_rename(src, dest):
             observations.append(output.getvalue())
             return original_rename(src, dest)
 
-        with contextlib.redirect_stdout(output), patch.object(renamer.os, 'rename', side_effect=observed_rename):
+        with contextlib.redirect_stdout(output), patch.object(renamer, 'move_file_no_replace', side_effect=observed_rename):
             status = renamer.main([str(self.root), '--recursive', '--verbose'])
 
         self.assertEqual(status, 0)
@@ -158,8 +158,9 @@ class FilesystemFailureTests(unittest.TestCase):
         metadata = self.write(self.root / 'Zorro.01.[of.03].[2026].[digital].[Son.of.Ultron-Empire]/ComicInfo.xml', b'metadata')
         status, output = self.run_cli(None, '--verbose')
         self.assertEqual(status, 0, output)
-        self.assertIn('KEEP DIR', output)
-        self.assertEqual(metadata.read_bytes(), b'metadata')
+        self.assertIn('MOVE FILE', output)
+        self.assertFalse(metadata.parent.exists())
+        self.assertEqual((self.root / 'Zorro (2026)/ComicInfo.xml').read_bytes(), b'metadata')
 
     def test_move_removes_only_empty_source_directory(self):
         source = self.write(self.root / 'Zorro.01.[of.03].[2026].[digital]/Zorro 001 (2026).cbr')
@@ -168,7 +169,7 @@ class FilesystemFailureTests(unittest.TestCase):
         status, output = self.run_cli()
         self.assertEqual(status, 0, output)
         self.assertFalse(source.parent.exists())
-        self.assertTrue(unrelated.is_dir())
+        self.assertFalse(unrelated.exists())
         self.assertEqual((self.root / 'Zorro (2026)/Zorro #001 (2026).cbr').read_bytes(), b'archive contents')
 
     def test_nested_source_directories_removed_children_first(self):
@@ -178,12 +179,106 @@ class FilesystemFailureTests(unittest.TestCase):
         status, preview = self.run_cli(None, '--dry-run', '--verbose')
         self.assertEqual(status, 0, preview)
         self.assertEqual(self.snapshot(self.root), before)
-        self.assertIn('REMOVE DIR: incoming/nested (empty)', preview)
-        self.assertIn('REMOVE DIR: incoming (empty)', preview)
+        self.assertIn('REMOVE DIR: incoming/nested', preview)
+        self.assertIn('REMOVE DIR: incoming', preview)
         status, output = self.run_cli(None, '--verbose')
         self.assertEqual(status, 0, output)
         self.assertFalse((self.root / 'incoming').exists())
         self.assertEqual(len(list((self.root / 'Zorro (2026)').glob('*.cbr'))), 2)
+
+    def test_recursive_metadata_merge_conflict_and_repeat(self):
+        canonical = self.root / 'Young Hellboy - Thrilling Sky Adventures (2026)'
+        old = self.root / 'Young.Hellboy-Thrilling.Sky.Adventures.01.[of.04].[2026].[digital].[Son.of.Ultron-Empire]'
+        self.write(canonical / 'Young Hellboy - Thrilling Sky Adventures #001 (2026).cbr')
+        self.write(canonical / 'cover.jpg', b'correct')
+        self.write(old / 'nested/metadata.xml', b'xml')
+        self.write(old / 'cover.jpg', b'conflict')
+        before = self.snapshot(self.root)
+        status, preview = self.run_cli(None, '--dry-run')
+        self.assertEqual(status, 0, preview)
+        self.assertEqual(self.snapshot(self.root), before)
+        status, output = self.run_cli()
+        self.assertEqual(status, 0, output)
+        self.assertFalse(old.exists())
+        self.assertEqual((canonical / 'nested/metadata.xml').read_bytes(), b'xml')
+        self.assertEqual((canonical / 'cover.jpg').read_bytes(), b'correct')
+        self.assertEqual((self.root / '.quarantine' / old.name / 'cover.jpg').read_bytes(), b'conflict')
+        after = self.snapshot(self.root)
+        status, output = self.run_cli()
+        self.assertEqual(status, 0, output)
+        self.assertEqual(self.snapshot(self.root), after)
+
+    def test_same_run_archive_collision_matches_dry_run(self):
+        self.write(self.root / 'first/Saga 001 (2012).cbz', b'first')
+        self.write(self.root / 'second/Saga 001 (2012).cbz', b'second')
+        before = self.snapshot(self.root)
+        status, preview = self.run_cli(None, '--dry-run', '--verbose')
+        self.assertEqual(status, 0, preview)
+        self.assertEqual(self.snapshot(self.root), before)
+        self.assertIn('QUARANTINE', preview)
+        status, output = self.run_cli(None, '--verbose')
+        self.assertEqual(status, 0, output)
+        self.assertEqual((self.root / 'Saga (2012)/Saga #001 (2012).cbz').read_bytes(), b'first')
+        self.assertEqual((self.root / '.quarantine/second/Saga 001 (2012).cbz').read_bytes(), b'second')
+        self.assertFalse((self.root / 'first').exists())
+        self.assertFalse((self.root / 'second').exists())
+
+    def test_identical_archive_collision_removes_only_source(self):
+        self.write(self.root / 'Saga (2012)/Saga #001 (2012).cbz', b'identical')
+        original = self.write(self.root / 'old/Saga 001 (2012).cbz', b'identical')
+        status, output = self.run_cli()
+        self.assertEqual(status, 0, output)
+        self.assertFalse(original.parent.exists())
+        self.assertEqual((self.root / 'Saga (2012)/Saga #001 (2012).cbz').read_bytes(), b'identical')
+        self.assertFalse((self.root / '.quarantine').exists())
+
+    def test_already_renamed_metadata_variant_merges_into_archive_folder(self):
+        canonical = self.root / 'Young Hellboy - Thrilling Sky Adventures (2026)'
+        old = self.root / 'Young Hellboy-Thrilling Sky Adventures (2026)'
+        self.write(canonical / 'Young Hellboy - Thrilling Sky Adventures #001 (2026).cbr')
+        self.write(old / 'nested/ComicInfo.xml', b'xml')
+        status, output = self.run_cli()
+        self.assertEqual(status, 0, output)
+        self.assertFalse(old.exists())
+        self.assertEqual((canonical / 'nested/ComicInfo.xml').read_bytes(), b'xml')
+
+    def test_metadata_follows_external_duplicate_quarantine(self):
+        self.write(self.root / 'Saga.01.[2012]/Saga 001 (2012).cbz', b'archive')
+        self.write(self.root / 'Saga.01.[2012]/metadata.xml', b'xml')
+        with patch.object(renamer, 'check_external_duplicate', return_value=True):
+            before = self.snapshot(self.root)
+            status, preview = self.run_cli(None, '--dry-run')
+            self.assertEqual(status, 0, preview)
+            self.assertEqual(self.snapshot(self.root), before)
+            status, output = self.run_cli()
+        self.assertEqual(status, 0, output)
+        destination = self.root / 'possibleDuplicates/Saga (2012)'
+        self.assertEqual((destination / 'Saga #001 (2012).cbz').read_bytes(), b'archive')
+        self.assertEqual((destination / 'metadata.xml').read_bytes(), b'xml')
+        self.assertFalse((self.root / 'Saga.01.[2012]').exists())
+        self.assertFalse((self.root / 'Saga (2012)').exists())
+
+    def test_dot_component_title_cannot_escape_library(self):
+        source = self.write(self.root / ' .. 001.cbz', b'archive')
+        status, output = self.run_cli()
+        self.assertNotEqual(status, 0, output)
+        self.assertFalse((self.parent / '.. #001.cbz').exists())
+        self.assertEqual((self.root / 'error' / source.name).read_bytes(), b'archive')
+
+    def test_destination_created_during_archive_move_is_not_overwritten(self):
+        source = self.write(self.root / 'old/Saga 001 (2012).cbz', b'source')
+        original_move = renamer.move_file_no_replace
+
+        def concurrent_move(src, dest):
+            Path(dest).write_bytes(b'concurrent destination')
+            return original_move(src, dest)
+
+        with patch.object(renamer, 'move_file_no_replace', side_effect=concurrent_move):
+            status, output = self.run_cli()
+        self.assertEqual(status, 0, output)
+        self.assertEqual((self.root / 'Saga (2012)/Saga #001 (2012).cbz').read_bytes(), b'concurrent destination')
+        self.assertEqual((self.root / '.quarantine/old/Saga 001 (2012).cbz').read_bytes(), b'source')
+        self.assertFalse(source.exists())
 
 
 if __name__ == '__main__':

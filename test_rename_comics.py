@@ -87,7 +87,8 @@ class DiscoveryTests(unittest.TestCase):
         original.write_bytes(b'existing')
         self.run_cli('-r')
         self.assertEqual(original.read_bytes(), b'existing')
-        self.assertEqual(len(list((self.root / 'Batman (2025)').glob('*.cbz'))), 2)
+        self.assertEqual(len(list((self.root / 'Batman (2025)').glob('*.cbz'))), 1)
+        self.assertEqual((self.root / '.quarantine/incoming/Batman 001 (2025).cbz').read_bytes(), b'comic contents')
 
     def test_volume_year_labels(self):
         cases = [
@@ -142,7 +143,7 @@ class DiscoveryTests(unittest.TestCase):
             self.assertIn('Renamed: 0  Skipped: 1', self.run_cli('--comicvine', '-r'))
         client.lookup_year.assert_called_once_with('Saga')
 
-    def test_unresolved_api_match_leaves_file_unchanged(self):
+    def test_unresolved_api_match_quarantines_unmatched_folder(self):
         source = self.comic('incoming/Saga 029.cbz')
         client = Mock()
         client.lookup_year.return_value = None
@@ -151,7 +152,8 @@ class DiscoveryTests(unittest.TestCase):
             output = self.run_cli('--comicvine', '-r')
         self.assertIn('Renamed: 0  Skipped: 1', output)
         self.assertIn('series year unresolved', output)
-        self.assertEqual(source.read_bytes(), b'comic contents')
+        self.assertFalse(source.exists())
+        self.assertEqual((self.root / '.quarantine/incoming/Saga 029.cbz').read_bytes(), b'comic contents')
 
     def test_offline_option_avoids_client_and_preserves_yearless_behavior(self):
         self.comic('Saga 029.cbz')

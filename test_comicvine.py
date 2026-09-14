@@ -80,6 +80,8 @@ class ComicVineTests(unittest.TestCase):
         failures = [HTTPError('https://example.com/?api_key=secret-test-key', 429,
                               'secret-test-key', {}, None), TimeoutError('secret-test-key')]
         for failure in failures:
+            if isinstance(failure, HTTPError):
+                self.addCleanup(failure.close)
             with self.subTest(failure=type(failure)):
                 self.http.reset_mock()
                 self.http.side_effect = failure

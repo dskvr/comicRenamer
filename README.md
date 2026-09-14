@@ -88,14 +88,26 @@ Files are organized into `Title (Year)/` folders under the selected directory,
 using the year parsed from each filename. Different years get separate folders;
 files without a parsed year use `Title/`. Already-normalized filenames are moved
 if they are in the wrong folder. Use `--recursive` to reorganize existing title
-folders. Empty source folders are removed after successful moves. Empty dotted
-release folders left by earlier runs (such as `Zorro.01.[of.03].[2026].[digital]`)
-are also removed when the corresponding normalized series folder exists.
-Folders with metadata or other remaining files are preserved and reported as
-`KEEP DIR` in verbose output. `OK` describes an archive's name and location, not
-the state of other folders. Hidden folders,
-`error/`, and `possibleDuplicates/` are excluded; directory symlinks are not
-followed. Dry runs do not create folders or move files.
+folders. Recursive runs also reconcile leftover directories, including metadata
+and nested content, regardless of the comic title. A source is matched using its
+archive destinations or an unambiguous series title/year match, allowing dotted
+release names and punctuation/spacing variants of already-renamed folders.
+
+Missing destination files are moved recursively. Same-name files are compared
+byte-for-byte: identical source copies are removed; differing source files go
+to `.quarantine/` without overwriting the destination. Old directories are
+removed only after their contents have been handled. Unmatched or ambiguous
+directories go to `.quarantine/`, with numbered suffixes if needed to preserve
+earlier quarantined content. Hidden content inside old folders is included;
+symlinks are quarantined as links, never followed during reconciliation.
+
+The library root, canonical series folders, and managed `error/`,
+`possibleDuplicates/`, and `.quarantine/` directories are not treated as old
+release folders. Failed archive operations preserve their source directories
+for inspection and return a nonzero status. `OK` describes an archive's name
+and location; subsequent `MOVE FILE`, `DUPLICATE`, `QUARANTINE`, and `REMOVE DIR`
+messages describe directory reconciliation. Dry runs preview these actions
+without writing or deleting anything.
 
 ### Options
 
@@ -144,8 +156,8 @@ years, not volume numbers:
 - `Batman Vol.2012.cbz` → `Batman (2012)/Batman (2012).cbz`
 
 If an explicit `(year)` is also present, it takes precedence. Run with
-`--recursive` to repair filenames inside existing folders and remove empty
-source folders. Metadata and other remaining files are never deleted.
+`--recursive` to repair filenames and reconcile leftover directories. Missing
+metadata moves into the matching series folder; conflicts are quarantined.
 
 ### Standalone
 
@@ -214,7 +226,9 @@ and standalone titles can receive a missing year.
 
 Lookup requires exactly one matching Comic Vine volume name, ignoring case and
 whitespace. Multiple editions, missing years, incomplete searches, and no matches
-leave the file unchanged and report `SKIP ... (series year unresolved)`. Network,
+do not rename the archive and report `SKIP ... (series year unresolved)`. In a
+recursive run, an unmatched source folder is subsequently moved to `.quarantine/`
+with its contents intact. Network,
 authentication, or API failures disable further requests for that run, while
 files with local years continue processing. Without `--comicvine`, files without
 years retain the normal title-only behavior, even when a key is configured.
@@ -227,7 +241,8 @@ pages and never choose a match from incomplete results. Dry runs still make API
 requests but do not write files or caches. Requests send series titles to Comic
 Vine; the key is never included in diagnostic output.
 
-Keep both `rename_comics.py` and `comicvine.py` together when copying the script.
+Keep `rename_comics.py`, `comicvine.py`, and `directory_reconcile.py` together
+when copying the script.
 
 ### External Comics Directory (Optional)
 
@@ -272,7 +287,7 @@ Failed renames leave the original file in place and print `FAILED` even without
 (or as a preview during `--dry-run`). Failed moves are counted under `Failed`,
 not `Moved to error`, and errors produce a nonzero exit status. Only newly
 created empty destination folders are removed after a failed rename; existing
-folders and metadata are preserved.
+folders and metadata are never deleted as failure cleanup.
 
 The script provides a summary at the end:
 

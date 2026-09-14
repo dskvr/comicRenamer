@@ -7,6 +7,7 @@ import sys
 from typing import Optional, Tuple
 
 from comicvine import ComicVine
+from directory_reconcile import reconcile_directories, move_file_no_replace
 
 
 COMIC_EXTENSIONS = {".cbr", ".cbz"}
@@ -240,6 +241,8 @@ def is_comic_file(path: str) -> bool:
 
 
 def ensure_dir(path: str) -> None:
+    if os.path.islink(path):
+        raise OSError(f"Refusing to write through directory symlink: {path}")
     if not os.path.isdir(path):
         os.makedirs(path, exist_ok=True)
 
@@ -432,14 +435,16 @@ def process_directory(target_dir: str, dry_run: bool, verbose: bool, recursive: 
 
     # Snapshot inputs before moving files or creating output folders.
     sources = []
-    scanned_dirs = []
     moved_sources = set()
+    target_dirs = set()
+    source_targets = {}
+    blocked_dirs = set()
+    collision_files = {}
+    planned_files = {}
     def scan_error(error):
         raise error
 
     for root, dirs, files in os.walk(target_dir, onerror=scan_error):
-        if root != target_dir:
-            scanned_dirs.append(root)
         dirs[:] = sorted(d for d in dirs if not d.startswith('.')
                          and d not in {"error", "possibleDuplicates"}) if recursive else []
         for name in sorted(files):
@@ -458,6 +463,9 @@ def process_directory(target_dir: str, dry_run: bool, verbose: bool, recursive: 
 
         stem, ext = os.path.splitext(os.path.basename(src_path))
         plan = plan_new_name_and_title(stem)
+        if plan and (plan[0] in {'.', '..'} or os.path.isabs(plan[0])
+                     or os.path.basename(plan[0]) != plan[0]):
+            plan = None
         if plan and not re.search(r"\(\d{4}\)$", plan[1]):
             year = directory_year(plan[0], src_path, target_dir)
             source = "directory"
@@ -484,8 +492,10 @@ def process_directory(target_dir: str, dry_run: bool, verbose: bool, recursive: 
                     shutil.move(src_path, dest_path)
                 except Exception as e:
                     print(f"FAILED    : {entry} -> {dest_path} ({e})")
+                    blocked_dirs.add(os.path.dirname(src_path))
                     errors_list.append(f"{entry} (move to error failed: {e})")
                     continue
+            moved_sources.add(src_path)
             errored += 1
             errors_list.append(entry)
             continue
@@ -493,33 +503,51 @@ def process_directory(target_dir: str, dry_run: bool, verbose: bool, recursive: 
         # Skip only when both the filename and series folder are correct.
         title_dir = os.path.join(target_dir, plan[0])
         if stem == desired_stem and os.path.abspath(os.path.dirname(src_path)) == os.path.abspath(title_dir):
+            target_dirs.add(title_dir)
             skipped += 1
             if verbose:
                 print(f"OK        : {entry}")
             continue
 
         # Place files into the planned series folder.
+        desired_path = os.path.join(title_dir, desired_stem + ext)
+        if os.path.lexists(desired_path) or desired_path in planned_files or os.path.islink(src_path):
+            collision_files[src_path] = desired_path
+            target_dirs.add(title_dir)
+            source_targets.setdefault(os.path.dirname(src_path), set()).add(title_dir)
+            skipped += 1
+            continue
         created_title_dir = not os.path.exists(title_dir)
         dest_path = unique_destination_path(title_dir, desired_stem, ext)
         
         if not dry_run:
             try:
                 ensure_dir(title_dir)
-                os.rename(src_path, dest_path)
+                move_file_no_replace(src_path, dest_path)
                 renamed += 1
             except Exception as e:
+                if isinstance(e, FileExistsError) and os.path.lexists(dest_path):
+                    collision_files[src_path] = dest_path
+                    target_dirs.add(title_dir)
+                    source_targets.setdefault(os.path.dirname(src_path), set()).add(title_dir)
+                    skipped += 1
+                    continue
                 print(f"FAILED    : {src_path} -> {dest_path} ({e}); original left in place")
                 if created_title_dir:
                     try:
                         os.rmdir(title_dir)
                     except OSError:
                         pass  # Never remove an existing or nonempty directory.
+                blocked_dirs.add(os.path.dirname(src_path))
                 errors_list.append(f"{entry} (rename failed: {e})")
                 continue
         else:
             # In dry run, count as renamed (would be renamed)
             renamed += 1
         moved_sources.add(src_path)
+        planned_files[dest_path] = src_path
+        target_dirs.add(title_dir)
+        source_targets.setdefault(os.path.dirname(src_path), set()).add(title_dir)
 
         if verbose or dry_run:
             print(f"RENAME    : {entry} -> {os.path.relpath(dest_path, target_dir)}")
@@ -588,36 +616,27 @@ def process_directory(target_dir: str, dry_run: bool, verbose: bool, recursive: 
                     if verbose:
                         print(f"WARNING   : Could not move folder {title} to possibleDuplicates: {e}")
 
-    # Prune only empty source folders. Recover empty dotted release folders
-    # left by earlier runs when the matching normalized series already exists.
-    source_dirs = {os.path.dirname(path) for path in moved_sources}
-    for directory in scanned_dirs:
-        name = os.path.basename(directory)
-        if re.search(r"\.\d{1,4}\.\[", name) and re.search(r"\[\d{4}\]", name):
-            release_stem = name.replace(".", " ").replace("[", "(").replace("]", ")")
-            release_plan = plan_new_name_and_title(release_stem)
-            if release_plan and os.path.isdir(os.path.join(target_dir, release_plan[0])):
-                source_dirs.add(directory)
-    removed_dirs = set()
-    for directory in sorted(source_dirs, key=lambda path: (-path.count(os.sep), path)):
-        if directory == target_dir or not os.path.isdir(directory) or os.path.islink(directory):
-            continue
-        remaining = [name for name in os.listdir(directory)
-                     if not (dry_run and (os.path.join(directory, name) in moved_sources
-                                          or os.path.join(directory, name) in removed_dirs))]
-        if remaining:
-            if verbose or dry_run:
-                print(f"KEEP DIR  : {os.path.relpath(directory, target_dir)} ({len(remaining)} remaining entries; not deleted)")
-            continue
-        if not dry_run:
-            try:
-                os.rmdir(directory)
-            except OSError as e:
-                print(f"WARNING   : Could not remove empty source directory {directory} ({e})")
-                continue
-        removed_dirs.add(directory)
-        if verbose or dry_run:
-            print(f"REMOVE DIR: {os.path.relpath(directory, target_dir)} (empty)")
+    if recursive or collision_files:
+        # Keep metadata and pending collisions with archives already moved by
+        # external duplicate detection, including in a dry-run preview.
+        relocated = {}
+        for title in folders_with_duplicates:
+            original = os.path.join(target_dir, title)
+            destination = os.path.join(duplicates_dir, title)
+            if dry_run or (not os.path.exists(original) and os.path.isdir(destination)):
+                relocated[original] = destination
+        target_dirs = {relocated.get(path, path) for path in target_dirs}
+        source_targets = {source: {relocated.get(path, path) for path in paths}
+                          for source, paths in source_targets.items()}
+        collision_files = {source: os.path.join(relocated.get(os.path.dirname(path), os.path.dirname(path)), os.path.basename(path))
+                           for source, path in collision_files.items()}
+        planned_files = {os.path.join(relocated.get(os.path.dirname(path), os.path.dirname(path)), os.path.basename(path)): source
+                         for path, source in planned_files.items()}
+        errors_list.extend(reconcile_directories(
+            target_dir, plan_new_name_and_title, target_dirs, source_targets,
+            moved_sources, dry_run=dry_run, blocked_dirs=blocked_dirs,
+            pending_files=collision_files, scan_directories=recursive,
+            planned_files=planned_files))
 
     return renamed, skipped, errored, duplicates, errors_list, duplicates_list
 
@@ -634,7 +653,7 @@ def main(argv: Optional[list] = None) -> int:
     )
     parser.add_argument("--dry-run", action="store_true", help="Show planned changes without modifying files")
     parser.add_argument("--verbose", "-v", action="store_true", help="Print detailed actions")
-    parser.add_argument("--recursive", "-r", action="store_true", help="Include subdirectories; organize renamed comics under the target directory")
+    parser.add_argument("--recursive", "-r", action="store_true", help="Scan subdirectories, reconcile leftover folders, and quarantine unmatched content")
     comicvine_options = parser.add_mutually_exclusive_group()
     comicvine_options.add_argument("--comicvine", action="store_true", help="Look up missing series years using COMICVINE_API_KEY")
     comicvine_options.add_argument("--no-comicvine", action="store_true", help="Keep Comic Vine lookup disabled (the default)")

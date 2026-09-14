@@ -97,7 +97,8 @@ followed. Dry runs do not create folders or move files.
 - `--dry-run` - Preview changes without modifying files
 - `--verbose` or `-v` - Show detailed output for each file processed
 - `--recursive` or `-r` - Include comics in subdirectories
-- `--no-comicvine` - Disable Comic Vine requests for an offline run
+- `--comicvine` - Enable missing-year lookups using `COMICVINE_API_KEY`
+- `--no-comicvine` - Keep Comic Vine requests disabled (the default)
 
 ### Examples
 
@@ -185,11 +186,12 @@ beside `rename_comics.py`:
 COMICVINE_API_KEY="your-api-key"
 ```
 
-Then run normally, including from a different working directory:
+Lookup is opt-in: a key alone does not enable network requests. Add `--comicvine`
+to enable it, including from a different working directory:
 
 ```bash
 python3 /mnt/cache/scripts/comicRenamer/rename_comics.py \
-  /mnt/user/media/Comics --recursive --dry-run --verbose
+  /mnt/user/media/Comics --recursive --comicvine --dry-run --verbose
 ```
 
 Year precedence is:
@@ -209,8 +211,9 @@ Lookup requires exactly one matching Comic Vine volume name, ignoring case and
 whitespace. Multiple editions, missing years, incomplete searches, and no matches
 leave the file unchanged and report `SKIP ... (series year unresolved)`. Network,
 authentication, or API failures disable further requests for that run, while
-files with local years continue processing. Without a key (or with
-`--no-comicvine`), files without years retain the normal title-only behavior.
+files with local years continue processing. Without `--comicvine`, files without
+years retain the normal title-only behavior, even when a key is configured.
+`--comicvine` without a key fails before processing or moving any files.
 
 Results, including misses, are cached in memory for the run. Requests are spaced
 at least 18.1 seconds apart to respect Comic Vine's published 200 requests per

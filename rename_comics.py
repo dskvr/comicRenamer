@@ -600,7 +600,9 @@ def main(argv: Optional[list] = None) -> int:
     parser.add_argument("--dry-run", action="store_true", help="Show planned changes without modifying files")
     parser.add_argument("--verbose", "-v", action="store_true", help="Print detailed actions")
     parser.add_argument("--recursive", "-r", action="store_true", help="Include subdirectories; organize renamed comics under the target directory")
-    parser.add_argument("--no-comicvine", action="store_true", help="Disable Comic Vine lookup even when an API key is configured")
+    comicvine_options = parser.add_mutually_exclusive_group()
+    comicvine_options.add_argument("--comicvine", action="store_true", help="Look up missing series years using COMICVINE_API_KEY")
+    comicvine_options.add_argument("--no-comicvine", action="store_true", help="Keep Comic Vine lookup disabled (the default)")
 
     args = parser.parse_args(argv)
 
@@ -611,7 +613,10 @@ def main(argv: Optional[list] = None) -> int:
 
     settings = load_configuration()
     api_key = settings.get("COMICVINE_API_KEY") or os.environ.get("COMICVINE_API_KEY")
-    comicvine = ComicVine(api_key) if api_key and not args.no_comicvine else None
+    if args.comicvine and not api_key:
+        print("--comicvine requires COMICVINE_API_KEY in .env or the environment", file=sys.stderr)
+        return 2
+    comicvine = ComicVine(api_key) if args.comicvine else None
     renamed, skipped, errored, duplicates, errors_list, duplicates_list = process_directory(target_dir, args.dry_run, args.verbose, args.recursive, comicvine)
     print(f"\nRenamed: {renamed}  Skipped: {skipped}  Moved to error: {errored}  Possible duplicates: {duplicates}")
     

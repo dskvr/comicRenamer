@@ -110,7 +110,7 @@ class DiscoveryTests(unittest.TestCase):
         client = Mock()
         with patch.object(renamer, 'ComicVine', return_value=client), patch.object(
                 renamer, 'load_configuration', return_value={'COMICVINE_API_KEY': 'test'}):
-            output = self.run_cli('-r', '--dry-run')
+            output = self.run_cli('--comicvine', '-r', '--dry-run')
         client.lookup_year.assert_not_called()
         for issue in ('029', '030', '031'):
             self.assertIn(f'Saga (2012)/Saga #{issue} (2012).cbz', output)
@@ -123,10 +123,10 @@ class DiscoveryTests(unittest.TestCase):
         before = self.snapshot()
         with patch.object(renamer, 'ComicVine', return_value=client), patch.object(
                 renamer, 'load_configuration', return_value={'COMICVINE_API_KEY': 'test'}):
-            output = self.run_cli('-r', '--dry-run')
+            output = self.run_cli('--comicvine', '-r', '--dry-run')
             self.assertIn('Saga (2012)/Saga #029 (2012).cbz', output)
             self.assertEqual(self.snapshot(), before)
-            self.run_cli('-r')
+            self.run_cli('--comicvine', '-r')
         client.lookup_year.assert_called_with('Saga')
         self.assertFalse(source.exists())
         self.assertEqual((self.root / 'Saga (2012)/Saga #029 (2012).cbz').read_bytes(), b'comic contents')
@@ -137,9 +137,9 @@ class DiscoveryTests(unittest.TestCase):
         client.lookup_year.return_value = '2012'
         with patch.object(renamer, 'ComicVine', return_value=client), patch.object(
                 renamer, 'load_configuration', return_value={'COMICVINE_API_KEY': 'test'}):
-            self.run_cli('-r')
+            self.run_cli('--comicvine', '-r')
             self.assertTrue((self.root / 'Saga (2012)/Saga Vol. 2 (2012).cbz').exists())
-            self.assertIn('Renamed: 0  Skipped: 1', self.run_cli('-r'))
+            self.assertIn('Renamed: 0  Skipped: 1', self.run_cli('--comicvine', '-r'))
         client.lookup_year.assert_called_once_with('Saga')
 
     def test_unresolved_api_match_leaves_file_unchanged(self):
@@ -148,7 +148,7 @@ class DiscoveryTests(unittest.TestCase):
         client.lookup_year.return_value = None
         with patch.object(renamer, 'ComicVine', return_value=client), patch.object(
                 renamer, 'load_configuration', return_value={'COMICVINE_API_KEY': 'test'}):
-            output = self.run_cli('-r')
+            output = self.run_cli('--comicvine', '-r')
         self.assertIn('Renamed: 0  Skipped: 1', output)
         self.assertIn('series year unresolved', output)
         self.assertEqual(source.read_bytes(), b'comic contents')
@@ -160,6 +160,26 @@ class DiscoveryTests(unittest.TestCase):
             output = self.run_cli('--no-comicvine', '--dry-run')
         client.assert_not_called()
         self.assertIn('Saga/Saga #029.cbz', output)
+
+    def test_configured_key_does_not_enable_lookup(self):
+        self.comic('Saga 029.cbz')
+        with patch.object(renamer, 'ComicVine') as client, patch.object(
+                renamer, 'load_configuration', return_value={'COMICVINE_API_KEY': 'test'}):
+            output = self.run_cli('--dry-run')
+        client.assert_not_called()
+        self.assertIn('Saga/Saga #029.cbz', output)
+
+    def test_comicvine_without_key_fails_before_processing(self):
+        self.comic('Saga 029.cbz')
+        before = self.snapshot()
+        error = io.StringIO()
+        with patch.object(renamer, 'ComicVine') as client, patch.object(
+                renamer, 'process_directory') as process, contextlib.redirect_stderr(error):
+            self.assertEqual(renamer.main([str(self.root), '--comicvine']), 2)
+        client.assert_not_called()
+        process.assert_not_called()
+        self.assertIn('--comicvine requires COMICVINE_API_KEY', error.getvalue())
+        self.assertEqual(self.snapshot(), before)
 
     def test_volume_year_repair_on_disk(self):
         source = self.comic('Batman Vol.2012/Batman Vol.2012 #001.cbz')

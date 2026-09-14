@@ -83,6 +83,29 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(original.read_bytes(), b'existing')
         self.assertEqual(len(list((self.root / 'Batman (2025)').glob('*.cbz'))), 2)
 
+    def test_volume_year_labels(self):
+        cases = [
+            ('Batman Vol.2012', 'Batman (2012)', 'Batman (2012)'),
+            ('Batman Vol.2012 #001', 'Batman (2012)', 'Batman #001 (2012)'),
+            ('Batman VOL. 2012 001 (of 04) (digital)', 'Batman (2012)', 'Batman #001 (2012)'),
+            ('Batman Vol.2012 #001 (2012)', 'Batman (2012)', 'Batman #001 (2012)'),
+            ('Batman Vol.2012 #001 (2013)', 'Batman (2013)', 'Batman #001 (2013)'),
+            ('Batman #001 Vol.2012', 'Batman (2012)', 'Batman #001 (2012)'),
+        ]
+        for stem, folder, filename in cases:
+            with self.subTest(stem=stem):
+                self.assertEqual(renamer.plan_new_name_and_title(stem), (folder, filename))
+
+    def test_volume_year_repair_on_disk(self):
+        source = self.comic('Batman Vol.2012/Batman Vol.2012 #001.cbz')
+        before = self.snapshot()
+        self.assertIn('Batman (2012)/Batman #001 (2012).cbz', self.run_cli('-r', '--dry-run'))
+        self.assertEqual(self.snapshot(), before)
+        self.run_cli('-r')
+        self.assertFalse(source.exists())
+        self.assertEqual((self.root / 'Batman (2012)/Batman #001 (2012).cbz').read_bytes(), b'comic contents')
+        self.assertIn('Renamed: 0  Skipped: 1', self.run_cli('-r'))
+
     def test_year_folders_for_supported_forms(self):
         cases = [
             ('Batman 001 (2025)', 'Batman (2025)', 'Batman #001 (2025)'),

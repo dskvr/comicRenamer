@@ -126,6 +126,16 @@ The script recognizes and normalizes various filename patterns:
 - `Watchmen v02 (2012).cbr` → `Watchmen (2012)/Watchmen Vol. 2 (2012).cbr`
 - `Saga Vol. 1 (2012).cbz` → `Saga (2012)/Saga Vol. 1 (2012).cbz`
 
+Four-digit year labels such as `Vol.2012` and `Vol. 2012` are treated as
+years, not volume numbers:
+
+- `Batman Vol.2012 #001.cbz` → `Batman (2012)/Batman #001 (2012).cbz`
+- `Batman Vol.2012.cbz` → `Batman (2012)/Batman (2012).cbz`
+
+If an explicit `(year)` is also present, it takes precedence. Run with
+`--recursive` to repair filenames inside existing folders; empty source folders
+are left in place.
+
 ### Standalone
 
 - `Batman Annual (2025).cbz` → `Batman Annual (2025)/Batman Annual (2025).cbz`

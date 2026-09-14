@@ -313,6 +313,17 @@ def capitalize_title(title: str) -> str:
 
 def plan_new_name_and_title(stem: str) -> Optional[Tuple[str, str]]:
     """Return (series_folder, desired_stem) for either issue, volume, or standalone forms."""
+    # Some releases encode a year as a volume label rather than (YYYY).
+    volume_year = re.search(r"(?<!\w)vol\.\s*(?P<year>\d{4})(?!\w)", stem, re.IGNORECASE)
+    if volume_year:
+        stem = (stem[:volume_year.start()] + " " + stem[volume_year.end():]).strip()
+        stem = re.sub(r"\s+", " ", stem)
+        # Preserve an explicit publication year when both forms are present.
+        if not re.search(r"\(\d{4}\)", stem):
+            metadata = re.search(r"\s*\((?!of\s+\d+\s*\))", stem, re.IGNORECASE)
+            position = metadata.start() if metadata else len(stem)
+            stem = stem[:position].rstrip() + f" ({volume_year.group('year')})" + stem[position:]
+
     vol = parse_volume_filename(stem)
     if vol:
         title, vol_num, year = vol
@@ -569,4 +580,3 @@ def main(argv: Optional[list] = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-

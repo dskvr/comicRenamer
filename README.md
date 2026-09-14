@@ -88,7 +88,12 @@ Files are organized into `Title (Year)/` folders under the selected directory,
 using the year parsed from each filename. Different years get separate folders;
 files without a parsed year use `Title/`. Already-normalized filenames are moved
 if they are in the wrong folder. Use `--recursive` to reorganize existing title
-folders. Empty source folders are left in place. Hidden folders,
+folders. Empty source folders are removed after successful moves. Empty dotted
+release folders left by earlier runs (such as `Zorro.01.[of.03].[2026].[digital]`)
+are also removed when the corresponding normalized series folder exists.
+Folders with metadata or other remaining files are preserved and reported as
+`KEEP DIR` in verbose output. `OK` describes an archive's name and location, not
+the state of other folders. Hidden folders,
 `error/`, and `possibleDuplicates/` are excluded; directory symlinks are not
 followed. Dry runs do not create folders or move files.
 
@@ -139,8 +144,8 @@ years, not volume numbers:
 - `Batman Vol.2012.cbz` → `Batman (2012)/Batman (2012).cbz`
 
 If an explicit `(year)` is also present, it takes precedence. Run with
-`--recursive` to repair filenames inside existing folders; empty source folders
-are left in place.
+`--recursive` to repair filenames inside existing folders and remove empty
+source folders. Metadata and other remaining files are never deleted.
 
 ### Standalone
 
@@ -261,6 +266,13 @@ export COMIC_SORTER_EXTERNAL_DIR="/Volumes/External Drive/Comics"
 This directory is used for duplicate detection. The script will check if files with the same title and issue number already exist there (ignoring file extensions like `.cbz` vs `.cbr`). If the configuration is not set or the directory doesn't exist, duplicate checking is automatically skipped.
 
 ## Output
+
+Failed renames leave the original file in place and print `FAILED` even without
+`--verbose`. The script reports `RENAME` only after a successful actual move
+(or as a preview during `--dry-run`). Failed moves are counted under `Failed`,
+not `Moved to error`, and errors produce a nonzero exit status. Only newly
+created empty destination folders are removed after a failed rename; existing
+folders and metadata are preserved.
 
 The script provides a summary at the end:
 

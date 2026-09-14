@@ -383,7 +383,7 @@ def print_summary_table(errors: list, duplicates: list) -> None:
     print("\n" + "=" * 80)
     
     if errors:
-        print("\n📋 ERRORS (Unparseable files):")
+        print("\n📋 FILES REQUIRING ATTENTION:")
         print("-" * 80)
         for i, error_file in enumerate(errors, 1):
             print(f"  {i:2d}. {error_file}")
@@ -432,10 +432,14 @@ def process_directory(target_dir: str, dry_run: bool, verbose: bool, recursive: 
 
     # Snapshot inputs before moving files or creating output folders.
     sources = []
+    scanned_dirs = []
+    moved_sources = set()
     def scan_error(error):
         raise error
 
     for root, dirs, files in os.walk(target_dir, onerror=scan_error):
+        if root != target_dir:
+            scanned_dirs.append(root)
         dirs[:] = sorted(d for d in dirs if not d.startswith('.')
                          and d not in {"error", "possibleDuplicates"}) if recursive else []
         for name in sorted(files):
@@ -478,9 +482,10 @@ def process_directory(target_dir: str, dry_run: bool, verbose: bool, recursive: 
             if not dry_run:
                 try:
                     shutil.move(src_path, dest_path)
-                except Exception:
-                    # Last-resort: count as error without moving
-                    pass
+                except Exception as e:
+                    print(f"FAILED    : {entry} -> {dest_path} ({e})")
+                    errors_list.append(f"{entry} (move to error failed: {e})")
+                    continue
             errored += 1
             errors_list.append(entry)
             continue
@@ -494,33 +499,32 @@ def process_directory(target_dir: str, dry_run: bool, verbose: bool, recursive: 
             continue
 
         # Place files into the planned series folder.
-        if not dry_run:
-            ensure_dir(title_dir)
+        created_title_dir = not os.path.exists(title_dir)
         dest_path = unique_destination_path(title_dir, desired_stem, ext)
-        if verbose or dry_run:
-            print(f"RENAME    : {entry} -> {os.path.relpath(dest_path, target_dir)}")
-        if verbose:
-            print(f"FOLDER    : {os.path.relpath(title_dir, target_dir)}")
         
         if not dry_run:
             try:
+                ensure_dir(title_dir)
                 os.rename(src_path, dest_path)
                 renamed += 1
             except Exception as e:
-                # On any failure, move to error
-                err_dest = unique_destination_path(error_dir, stem, ext)
-                if verbose:
-                    print(f"FAILED    : {entry} -> moving to {os.path.relpath(err_dest, target_dir)} ({e})")
-                try:
-                    shutil.move(src_path, err_dest)
-                except Exception:
-                    pass
-                errored += 1
-                errors_list.append(f"{entry} (rename failed)")
+                print(f"FAILED    : {src_path} -> {dest_path} ({e}); original left in place")
+                if created_title_dir:
+                    try:
+                        os.rmdir(title_dir)
+                    except OSError:
+                        pass  # Never remove an existing or nonempty directory.
+                errors_list.append(f"{entry} (rename failed: {e})")
                 continue
         else:
             # In dry run, count as renamed (would be renamed)
             renamed += 1
+        moved_sources.add(src_path)
+
+        if verbose or dry_run:
+            print(f"RENAME    : {entry} -> {os.path.relpath(dest_path, target_dir)}")
+        if verbose:
+            print(f"FOLDER    : {os.path.relpath(title_dir, target_dir)}")
 
         # Check if this comic already exists in the external comics directory
         # Do this after renaming/moving so the file is properly organized first
@@ -584,6 +588,37 @@ def process_directory(target_dir: str, dry_run: bool, verbose: bool, recursive: 
                     if verbose:
                         print(f"WARNING   : Could not move folder {title} to possibleDuplicates: {e}")
 
+    # Prune only empty source folders. Recover empty dotted release folders
+    # left by earlier runs when the matching normalized series already exists.
+    source_dirs = {os.path.dirname(path) for path in moved_sources}
+    for directory in scanned_dirs:
+        name = os.path.basename(directory)
+        if re.search(r"\.\d{1,4}\.\[", name) and re.search(r"\[\d{4}\]", name):
+            release_stem = name.replace(".", " ").replace("[", "(").replace("]", ")")
+            release_plan = plan_new_name_and_title(release_stem)
+            if release_plan and os.path.isdir(os.path.join(target_dir, release_plan[0])):
+                source_dirs.add(directory)
+    removed_dirs = set()
+    for directory in sorted(source_dirs, key=lambda path: (-path.count(os.sep), path)):
+        if directory == target_dir or not os.path.isdir(directory) or os.path.islink(directory):
+            continue
+        remaining = [name for name in os.listdir(directory)
+                     if not (dry_run and (os.path.join(directory, name) in moved_sources
+                                          or os.path.join(directory, name) in removed_dirs))]
+        if remaining:
+            if verbose or dry_run:
+                print(f"KEEP DIR  : {os.path.relpath(directory, target_dir)} ({len(remaining)} remaining entries; not deleted)")
+            continue
+        if not dry_run:
+            try:
+                os.rmdir(directory)
+            except OSError as e:
+                print(f"WARNING   : Could not remove empty source directory {directory} ({e})")
+                continue
+        removed_dirs.add(directory)
+        if verbose or dry_run:
+            print(f"REMOVE DIR: {os.path.relpath(directory, target_dir)} (empty)")
+
     return renamed, skipped, errored, duplicates, errors_list, duplicates_list
 
 
@@ -618,12 +653,13 @@ def main(argv: Optional[list] = None) -> int:
         return 2
     comicvine = ComicVine(api_key) if args.comicvine else None
     renamed, skipped, errored, duplicates, errors_list, duplicates_list = process_directory(target_dir, args.dry_run, args.verbose, args.recursive, comicvine)
-    print(f"\nRenamed: {renamed}  Skipped: {skipped}  Moved to error: {errored}  Possible duplicates: {duplicates}")
+    failed = len(errors_list) - errored
+    print(f"\nRenamed: {renamed}  Skipped: {skipped}  Moved to error: {errored}  Possible duplicates: {duplicates}  Failed: {failed}")
     
     # Print summary tables
     print_summary_table(errors_list, duplicates_list)
     
-    return 0
+    return 1 if errors_list else 0
 
 
 if __name__ == "__main__":

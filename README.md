@@ -19,6 +19,9 @@ A Python script to automatically rename and organize comic book files (`.cbz` an
 
 - **Dry-run mode** - Preview changes before applying them
 
+- **Missing years** - Reuse a matching series directory's year, then optionally
+  look up the series' first publication year on Comic Vine
+
 - **Error handling** - Moves unparseable files to an `error/` directory
 
 - **Summary reports** - Shows detailed statistics and lists of errors/duplicates
@@ -62,7 +65,8 @@ A Python script to automatically rename and organize comic book files (`.cbz` an
    echo 'export COMIC_SORTER_EXTERNAL_DIR="/path/to/your/external/comics"' >> ~/.zshrc
    ```
 
-   The script checks the `.env` file first, then falls back to the environment variable.
+The script checks `.env` in the working directory, then `.env` beside the script,
+then falls back to the environment variable.
 
 ## Usage
 
@@ -93,6 +97,7 @@ followed. Dry runs do not create folders or move files.
 - `--dry-run` - Preview changes without modifying files
 - `--verbose` or `-v` - Show detailed output for each file processed
 - `--recursive` or `-r` - Include comics in subdirectories
+- `--no-comicvine` - Disable Comic Vine requests for an offline run
 
 ### Examples
 
@@ -171,6 +176,51 @@ The script checks for duplicates by:
 
 ## Configuration
 
+### Comic Vine Missing-Year Lookup (Optional)
+
+Add your [Comic Vine API key](https://comicvine.gamespot.com/api/) to `.env`
+beside `rename_comics.py`:
+
+```dotenv
+COMICVINE_API_KEY="your-api-key"
+```
+
+Then run normally, including from a different working directory:
+
+```bash
+python3 /mnt/cache/scripts/comicRenamer/rename_comics.py \
+  /mnt/user/media/Comics --recursive --dry-run --verbose
+```
+
+Year precedence is:
+
+1. A parsed filename year, including `Vol.2012` labels.
+2. The nearest matching series directory, such as `Saga (2012)`, `Saga Vol.2012`,
+   or `Saga 2012`, up to and including the selected directory. Unrelated folder
+   names do not supply years.
+3. Comic Vine's series/volume `start_year` (the series' first publication year,
+   not the individual issue's year).
+
+For example, `Saga #029.cbz` can become `Saga (2012)/Saga #029 (2012).cbz`.
+Existing filename years are never replaced with an API result. Issues, volumes,
+and standalone titles can receive a missing year.
+
+Lookup requires exactly one matching Comic Vine volume name, ignoring case and
+whitespace. Multiple editions, missing years, incomplete searches, and no matches
+leave the file unchanged and report `SKIP ... (series year unresolved)`. Network,
+authentication, or API failures disable further requests for that run, while
+files with local years continue processing. Without a key (or with
+`--no-comicvine`), files without years retain the normal title-only behavior.
+
+Results, including misses, are cached in memory for the run. Requests are spaced
+at least 18.1 seconds apart to respect Comic Vine's published 200 requests per
+resource per hour; large collections can take time. Searches inspect up to five
+pages and never choose a match from incomplete results. Dry runs still make API
+requests but do not write files or caches. Requests send series titles to Comic
+Vine; the key is never included in diagnostic output.
+
+Keep both `rename_comics.py` and `comicvine.py` together when copying the script.
+
 ### External Comics Directory (Optional)
 
 Duplicate detection is **completely optional**. If you don't want to check for duplicates, you can simply leave the configuration unset. The script will work normally and skip duplicate checking.
@@ -201,8 +251,9 @@ export COMIC_SORTER_EXTERNAL_DIR="/Volumes/External Drive/Comics"
 **Priority**: The script checks in this order:
 
 1. `.env` file (if it exists)
-2. Environment variable `COMIC_SORTER_EXTERNAL_DIR`
-3. If neither is set, duplicate checking is skipped
+2. `.env` beside the script, for settings absent from the working-directory file
+3. Environment variable `COMIC_SORTER_EXTERNAL_DIR`
+4. If none is set, duplicate checking is skipped
 
 This directory is used for duplicate detection. The script will check if files with the same title and issue number already exist there (ignoring file extensions like `.cbz` vs `.cbr`). If the configuration is not set or the directory doesn't exist, duplicate checking is automatically skipped.
 

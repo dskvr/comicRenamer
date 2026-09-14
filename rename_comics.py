@@ -6,6 +6,8 @@ import shutil
 import sys
 from typing import Optional, Tuple
 
+from comicvine import ComicVine
+
 
 COMIC_EXTENSIONS = {".cbr", ".cbz"}
 
@@ -36,8 +38,14 @@ def load_env_file(env_path: str = ".env") -> dict:
     return env_vars
 
 
-# Load .env file if it exists
-env_file_vars = load_env_file()
+def load_configuration() -> dict:
+    """Read script-local settings, with working-directory settings taking priority."""
+    settings = load_env_file(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+    settings.update(load_env_file())
+    return settings
+
+
+env_file_vars = load_configuration()
 # Check .env file first, then environment variable
 EXTERNAL_COMICS_DIR = env_file_vars.get("COMIC_SORTER_EXTERNAL_DIR") or os.environ.get("COMIC_SORTER_EXTERNAL_DIR")
 
@@ -118,7 +126,7 @@ def parse_filename(stem: str) -> Optional[Tuple[str, int, Optional[str]]]:
     return title, issue_num, year
 
 
-def parse_volume_filename(stem: str) -> Optional[Tuple[str, int, str]]:
+def parse_volume_filename(stem: str) -> Optional[Tuple[str, int, Optional[str]]]:
     """
     Extract (title, volume_number, year) from a filename stem for trades/volumes.
 
@@ -128,7 +136,7 @@ def parse_volume_filename(stem: str) -> Optional[Tuple[str, int, str]]:
 
     Returns None if not parseable.
     """
-    match = re.search(r"^(?P<title>.+?)\s+v(?P<vol>\d{1,4})\s*\((?P<year>\d{4})\)\)?", stem, flags=re.IGNORECASE)
+    match = re.search(r"^(?P<title>.+?)\s+v(?:ol\.\s*)?(?P<vol>\d{1,4})(?!\w)\s*(?:\((?P<year>\d{4})\)\)?)?", stem, flags=re.IGNORECASE)
     if not match:
         return None
 
@@ -328,7 +336,9 @@ def plan_new_name_and_title(stem: str) -> Optional[Tuple[str, str]]:
     if vol:
         title, vol_num, year = vol
         title = capitalize_title(title)
-        return f"{title} ({year})", f"{title} Vol. {vol_num} ({year})"
+        if year:
+            return f"{title} ({year})", f"{title} Vol. {vol_num} ({year})"
+        return title, f"{title} Vol. {vol_num}"
 
     # Check for annual issues before regular issues (annual has more specific pattern)
     annual = parse_annual_filename(stem)
@@ -389,7 +399,22 @@ def print_summary_table(errors: list, duplicates: list) -> None:
     print("=" * 80 + "\n")
 
 
-def process_directory(target_dir: str, dry_run: bool, verbose: bool, recursive: bool = False) -> Tuple[int, int, int, int, list, list]:
+def directory_year(title: str, src_path: str, target_dir: str) -> Optional[str]:
+    """Find a year on the nearest matching series folder, up to the scan root."""
+    directory = os.path.abspath(os.path.dirname(src_path))
+    target_dir = os.path.abspath(target_dir)
+    while True:
+        match = re.fullmatch(r"(.+?)\s+(?:\((\d{4})\)|Vol\.\s*(\d{4})|(\d{4}))",
+                             os.path.basename(directory), re.IGNORECASE)
+        if match and capitalize_title(match[1]) == title:
+            return next(year for year in match.groups()[1:] if year)
+        if directory == target_dir or os.path.dirname(directory) == directory:
+            return None
+        directory = os.path.dirname(directory)
+
+
+def process_directory(target_dir: str, dry_run: bool, verbose: bool, recursive: bool = False,
+                      comicvine: Optional[ComicVine] = None) -> Tuple[int, int, int, int, list, list]:
     """Process files in target_dir. Returns (renamed_count, skipped_count, error_count, duplicates_count, errors_list, duplicates_list)."""
     error_dir = os.path.join(target_dir, "error")
     duplicates_dir = os.path.join(target_dir, "possibleDuplicates")
@@ -429,6 +454,20 @@ def process_directory(target_dir: str, dry_run: bool, verbose: bool, recursive: 
 
         stem, ext = os.path.splitext(os.path.basename(src_path))
         plan = plan_new_name_and_title(stem)
+        if plan and not re.search(r"\(\d{4}\)$", plan[1]):
+            year = directory_year(plan[0], src_path, target_dir)
+            source = "directory"
+            if not year and comicvine is not None:
+                year = comicvine.lookup_year(plan[0])
+                source = "Comic Vine series start year"
+                if not year:
+                    skipped += 1
+                    print(f"SKIP      : {entry} (series year unresolved)")
+                    continue
+            if year:
+                if verbose or dry_run:
+                    print(f"YEAR      : {entry} -> {year} ({source})")
+                plan = (f"{plan[0]} ({year})", f"{plan[1]} ({year})")
         desired_stem = None if not plan else plan[1]
 
         if not desired_stem:
@@ -561,6 +600,7 @@ def main(argv: Optional[list] = None) -> int:
     parser.add_argument("--dry-run", action="store_true", help="Show planned changes without modifying files")
     parser.add_argument("--verbose", "-v", action="store_true", help="Print detailed actions")
     parser.add_argument("--recursive", "-r", action="store_true", help="Include subdirectories; organize renamed comics under the target directory")
+    parser.add_argument("--no-comicvine", action="store_true", help="Disable Comic Vine lookup even when an API key is configured")
 
     args = parser.parse_args(argv)
 
@@ -569,7 +609,10 @@ def main(argv: Optional[list] = None) -> int:
         print(f"Not a directory: {target_dir}", file=sys.stderr)
         return 2
 
-    renamed, skipped, errored, duplicates, errors_list, duplicates_list = process_directory(target_dir, args.dry_run, args.verbose, args.recursive)
+    settings = load_configuration()
+    api_key = settings.get("COMICVINE_API_KEY") or os.environ.get("COMICVINE_API_KEY")
+    comicvine = ComicVine(api_key) if api_key and not args.no_comicvine else None
+    renamed, skipped, errored, duplicates, errors_list, duplicates_list = process_directory(target_dir, args.dry_run, args.verbose, args.recursive, comicvine)
     print(f"\nRenamed: {renamed}  Skipped: {skipped}  Moved to error: {errored}  Possible duplicates: {duplicates}")
     
     # Print summary tables

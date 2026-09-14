@@ -244,7 +244,7 @@ def check_external_duplicate(title: str, desired_filename: str) -> bool:
     
     Returns True if a file with the same stem (name without extension) exists in EXTERNAL_COMICS_DIR/Title/ (case-insensitive)
     """
-    if not os.path.isdir(EXTERNAL_COMICS_DIR):
+    if not EXTERNAL_COMICS_DIR or not os.path.isdir(EXTERNAL_COMICS_DIR):
         # External directory doesn't exist, treat as no duplicate
         return False
     
@@ -378,12 +378,13 @@ def print_summary_table(errors: list, duplicates: list) -> None:
     print("=" * 80 + "\n")
 
 
-def process_directory(target_dir: str, dry_run: bool, verbose: bool) -> Tuple[int, int, int, int, list, list]:
+def process_directory(target_dir: str, dry_run: bool, verbose: bool, recursive: bool = False) -> Tuple[int, int, int, int, list, list]:
     """Process files in target_dir. Returns (renamed_count, skipped_count, error_count, duplicates_count, errors_list, duplicates_list)."""
     error_dir = os.path.join(target_dir, "error")
     duplicates_dir = os.path.join(target_dir, "possibleDuplicates")
-    ensure_dir(error_dir)
-    ensure_dir(duplicates_dir)
+    if not dry_run:
+        ensure_dir(error_dir)
+        ensure_dir(duplicates_dir)
 
     renamed = 0
     skipped = 0
@@ -393,17 +394,29 @@ def process_directory(target_dir: str, dry_run: bool, verbose: bool) -> Tuple[in
     duplicates_list = []
     folders_with_duplicates = set()  # Track title folders that contain duplicates
 
-    for entry in sorted(os.listdir(target_dir)):
-        if entry.startswith('.'):
-            # Skip hidden files
-            continue
-        src_path = os.path.join(target_dir, entry)
-        if not os.path.isfile(src_path):
-            continue
-        if not is_comic_file(src_path):
-            continue
+    # Snapshot inputs before moving files or creating output folders.
+    sources = []
+    def scan_error(error):
+        raise error
 
-        stem, ext = os.path.splitext(entry)
+    for root, dirs, files in os.walk(target_dir, onerror=scan_error):
+        dirs[:] = sorted(d for d in dirs if not d.startswith('.')
+                         and d not in {"error", "possibleDuplicates"}) if recursive else []
+        for name in sorted(files):
+            path = os.path.join(root, name)
+            if not name.startswith('.') and os.path.isfile(path) and is_comic_file(path):
+                sources.append(path)
+
+    if verbose:
+        print(f"SCAN      : {target_dir} ({'recursive' if recursive else 'top-level only'}); found {len(sources)} comic file(s)")
+    if not sources:
+        print(f"No .cbz or .cbr files found in {target_dir}."
+              + (" Use --recursive to include subdirectories." if not recursive else ""))
+
+    for src_path in sources:
+        entry = os.path.relpath(src_path, target_dir)
+
+        stem, ext = os.path.splitext(os.path.basename(src_path))
         plan = plan_new_name_and_title(stem)
         desired_stem = None if not plan else plan[1]
 
@@ -431,7 +444,8 @@ def process_directory(target_dir: str, dry_run: bool, verbose: bool) -> Tuple[in
 
         # Place renamed files into a subfolder named after the Title
         title_dir = os.path.join(target_dir, plan[0])
-        ensure_dir(title_dir)
+        if not dry_run:
+            ensure_dir(title_dir)
         dest_path = unique_destination_path(title_dir, desired_stem, ext)
         if verbose or dry_run:
             print(f"RENAME    : {entry} -> {os.path.relpath(dest_path, target_dir)}")
@@ -463,7 +477,7 @@ def process_directory(target_dir: str, dry_run: bool, verbose: bool) -> Tuple[in
         desired_filename = desired_stem + ext
         is_duplicate = check_external_duplicate(plan[0], desired_filename)
         
-        if verbose or dry_run:
+        if (verbose or dry_run) and EXTERNAL_COMICS_DIR:
             # Show duplicate check information
             external_path = os.path.join(EXTERNAL_COMICS_DIR, plan[0], desired_filename)
             if is_duplicate:
@@ -484,7 +498,7 @@ def process_directory(target_dir: str, dry_run: bool, verbose: bool) -> Tuple[in
     # After processing all files, move entire folders that contain duplicates
     for title in folders_with_duplicates:
         title_dir = os.path.join(target_dir, title)
-        if os.path.isdir(title_dir):
+        if dry_run or os.path.isdir(title_dir):
             # Calculate destination for the entire folder
             duplicate_folder_dest = os.path.join(duplicates_dir, title)
             if verbose or dry_run:
@@ -535,6 +549,7 @@ def main(argv: Optional[list] = None) -> int:
     )
     parser.add_argument("--dry-run", action="store_true", help="Show planned changes without modifying files")
     parser.add_argument("--verbose", "-v", action="store_true", help="Print detailed actions")
+    parser.add_argument("--recursive", "-r", action="store_true", help="Include subdirectories; organize renamed comics under the target directory")
 
     args = parser.parse_args(argv)
 
@@ -543,7 +558,7 @@ def main(argv: Optional[list] = None) -> int:
         print(f"Not a directory: {target_dir}", file=sys.stderr)
         return 2
 
-    renamed, skipped, errored, duplicates, errors_list, duplicates_list = process_directory(target_dir, args.dry_run, args.verbose)
+    renamed, skipped, errored, duplicates, errors_list, duplicates_list = process_directory(target_dir, args.dry_run, args.verbose, args.recursive)
     print(f"\nRenamed: {renamed}  Skipped: {skipped}  Moved to error: {errored}  Possible duplicates: {duplicates}")
     
     # Print summary tables
@@ -554,6 +569,4 @@ def main(argv: Optional[list] = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-
-
 

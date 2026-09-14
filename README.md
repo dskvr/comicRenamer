@@ -73,11 +73,23 @@ python3 rename_comics.py [directory]
 ```
 
 If no directory is specified, it defaults to the current working directory.
+By default, only files directly inside that directory are processed. To include
+comics inside subdirectories, add `--recursive` (`-r`):
+
+```bash
+python3 rename_comics.py /mnt/user/media/Comics --recursive --dry-run --verbose
+```
+
+Recursive mode organizes renamed files into title folders under the selected
+directory. Already-normalized filenames remain where they are. Hidden folders,
+`error/`, and `possibleDuplicates/` are excluded; directory symlinks are not
+followed. Dry runs do not create folders or move files.
 
 ### Options
 
 - `--dry-run` - Preview changes without modifying files
 - `--verbose` or `-v` - Show detailed output for each file processed
+- `--recursive` or `-r` - Include comics in subdirectories
 
 ### Examples
 
